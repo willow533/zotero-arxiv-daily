@@ -33,7 +33,7 @@ framework = """
 
 <br><br>
 <div>
-To unsubscribe, remove your email in your Github Action setting.
+如需退订，请在 GitHub Actions 配置中移除你的收件邮箱。
 </div>
 
 </body>
@@ -45,7 +45,7 @@ def get_empty_html():
   <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif; border: 1px solid #ddd; border-radius: 8px; padding: 16px; background-color: #f9f9f9;">
   <tr>
     <td style="font-size: 20px; font-weight: bold; color: #333;">
-        No Papers Today. Take a Rest!
+        今天没有新论文，好好休息一下！
     </td>
   </tr>
   </table>
@@ -69,12 +69,12 @@ def get_block_html(title:str, authors:str, rate:str, tldr:str, pdf_url:str, affi
     </tr>
     <tr>
         <td style="font-size: 14px; color: #333; padding: 8px 0;">
-            <strong>Relevance:</strong> {rate}
+            <strong>相关性：</strong> {rate}
         </td>
     </tr>
     <tr>
         <td style="font-size: 14px; color: #333; padding: 8px 0;">
-            <strong>TLDR:</strong> {tldr}
+            <strong>一句话总结：</strong> {tldr}
         </td>
     </tr>
 
@@ -124,7 +124,7 @@ def render_email(papers:list[Paper]) -> str:
             if len(p.affiliations) > 5:
                 affiliations += ', ...'
         else:
-            affiliations = 'Unknown Affiliation'
+            affiliations = '未知机构'
         parts.append(get_block_html(p.title, authors, rate, p.tldr, p.pdf_url, affiliations))
 
     content = '<br>' + '</br><br>'.join(parts) + '</br>'

@@ -1,6 +1,7 @@
 """Tests for zotero_arxiv_daily.protocol: Paper.generate_tldr, Paper.generate_affiliations."""
 
 import pytest
+from types import SimpleNamespace
 
 from tests.canned_responses import make_sample_paper, make_stub_openai_client
 
@@ -53,6 +54,39 @@ def test_tldr_truncates_long_prompt(llm_params):
     paper = make_sample_paper(full_text="word " * 10000)
     result = paper.generate_tldr(client, llm_params)
     assert result is not None
+
+
+def test_tldr_prompt_preserves_english_academic_terms():
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="这篇论文提出了一种 Transformer 方法。"),
+                )
+            ]
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        )
+    )
+    llm_params = {
+        "language": "Chinese with key academic terms and paper titles kept in English",
+        "generation_kwargs": {"model": "gpt-4o-mini", "max_tokens": 16384},
+    }
+    paper = make_sample_paper(title="Attention Is All You Need")
+
+    result = paper.generate_tldr(client, llm_params)
+
+    messages = captured["messages"]
+    assert result == "这篇论文提出了一种 Transformer 方法。"
+    assert "Preserve the paper title" in messages[1]["content"]
+    assert "Do not translate the paper title" in messages[1]["content"]
+    assert "paper titles" in messages[0]["content"]
 
 
 # ---------------------------------------------------------------------------

@@ -23,7 +23,12 @@ class Paper:
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')
-        prompt = f"Given the following information of a paper, generate a one-sentence TLDR summary in {lang}:\n\n"
+        prompt = (
+            "Given the following information of a paper, generate a one-sentence TLDR summary.\n"
+            f"Primary language/style: {lang}.\n"
+            "Preserve the paper title, method names, model names, dataset names, metrics, abbreviations, "
+            "and established academic terms in English. Do not translate the paper title.\n\n"
+        )
         if self.title:
             prompt += f"Title:\n {self.title}\n\n"
 
@@ -47,7 +52,11 @@ class Paper:
             messages=[
                 {
                     "role": "system",
-                    "content": f"You are an assistant who perfectly summarizes scientific paper, and gives the core idea of the paper to the user. Your answer should be in {lang}.",
+                    "content": (
+                        "You are an assistant who clearly summarizes scientific papers and gives the core idea to the user. "
+                        f"Write primarily in {lang}. If the requested language is Chinese, use fluent Chinese for the explanation, "
+                        "but keep paper titles, method/model/dataset names, metrics, abbreviations, and established academic terms in English."
+                    ),
                 },
                 {"role": "user", "content": prompt},
             ],
