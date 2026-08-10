@@ -8,6 +8,23 @@ from loguru import logger
 import json
 RawPaperItem = TypeVar('RawPaperItem')
 
+def _prefers_chinese(language: str) -> bool:
+    language = str(language).lower()
+    return 'chinese' in language or '中文' in language or language.startswith('zh')
+
+
+def _contains_chinese(text: str) -> bool:
+    return re.search(r'[\u4e00-\u9fff]', text or '') is not None
+
+
+def _needs_chinese_tldr_retry(tldr: str, language: str) -> bool:
+    if not _prefers_chinese(language):
+        return False
+    if not tldr or not _contains_chinese(tldr):
+        return True
+    return len(tldr) > 500
+
+
 @dataclass
 class Paper:
     source: str
@@ -26,9 +43,17 @@ class Paper:
         prompt = (
             "Given the following information of a paper, generate a one-sentence TLDR summary.\n"
             f"Primary language/style: {lang}.\n"
+            "Output exactly one concise sentence. Do not copy the abstract verbatim.\n"
             "Preserve the paper title, method names, model names, dataset names, metrics, abbreviations, "
-            "and established academic terms in English. Do not translate the paper title.\n\n"
+            "and established academic terms in English. Do not translate the paper title.\n"
         )
+        if _prefers_chinese(lang):
+            prompt += (
+                "The summary explanation must be mainly Simplified Chinese. "
+                "Use English only for names, titles, abbreviations, formulas, datasets, metrics, and established terms.\n\n"
+            )
+        else:
+            prompt += "\n"
         if self.title:
             prompt += f"Title:\n {self.title}\n\n"
 
@@ -47,22 +72,39 @@ class Paper:
         prompt_tokens = enc.encode(prompt)
         prompt_tokens = prompt_tokens[:4000]  # truncate to 4000 tokens
         prompt = enc.decode(prompt_tokens)
-        
-        response = openai_client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an assistant who clearly summarizes scientific papers and gives the core idea to the user. "
-                        f"Write primarily in {lang}. If the requested language is Chinese, use fluent Chinese for the explanation, "
-                        "but keep paper titles, method/model/dataset names, metrics, abbreviations, and established academic terms in English."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-            **llm_params.get('generation_kwargs', {})
+
+        system_prompt = (
+            "You are an assistant who clearly summarizes scientific papers and gives the core idea to the user. "
+            f"Write exactly one concise sentence primarily in {lang}. "
+            "Do not copy the abstract verbatim. "
+            "If the requested language is Chinese, the explanation must be mainly Simplified Chinese, "
+            "but keep paper titles, method/model/dataset names, metrics, abbreviations, and established academic terms in English."
         )
-        tldr = response.choices[0].message.content
+
+        def request_tldr(user_prompt: str) -> str:
+            response = openai_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                **llm_params.get('generation_kwargs', {})
+            )
+            return response.choices[0].message.content
+
+        tldr = request_tldr(prompt)
+        if _needs_chinese_tldr_retry(tldr, lang):
+            logger.warning(f"Generated TLDR is not a Chinese concise summary for {self.url}. Retrying once.")
+            retry_prompt = (
+                f"{prompt}\n\n"
+                "The previous answer was not acceptable because it was not mainly Chinese or was too long. "
+                "Rewrite it now as exactly one concise Simplified Chinese sentence. "
+                "Keep only key academic terms, method/model/dataset names, metrics, abbreviations, and the paper title in English."
+            )
+            tldr = request_tldr(retry_prompt)
+            if _needs_chinese_tldr_retry(tldr, lang):
+                logger.warning(f"Failed to generate an acceptable Chinese TLDR for {self.url}.")
+                return "TL;DR 生成失败，请打开 PDF 或查看论文原文摘要。"
+
         return tldr
     
     def generate_tldr(self, openai_client:OpenAI,llm_params:dict) -> str:
@@ -72,7 +114,10 @@ class Paper:
             return tldr
         except Exception as e:
             logger.warning(f"Failed to generate tldr of {self.url}: {e}")
-            tldr = self.abstract
+            if _prefers_chinese(llm_params.get('language', 'English')):
+                tldr = "TL;DR 生成失败，请打开 PDF 或查看论文原文摘要。"
+            else:
+                tldr = self.abstract
             self.tldr = tldr
             return tldr
 

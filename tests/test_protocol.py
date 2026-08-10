@@ -89,6 +89,95 @@ def test_tldr_prompt_preserves_english_academic_terms():
     assert "paper titles" in messages[0]["content"]
 
 
+def test_chinese_tldr_retries_english_response():
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="This paper proposes a Transformer method for robot manipulation."
+                        ),
+                    )
+                ]
+            )
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="这篇论文提出了用于 robot manipulation 的 Transformer 方法。"),
+                )
+            ]
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        )
+    )
+    llm_params = {
+        "language": "Chinese with key academic terms and paper titles kept in English",
+        "generation_kwargs": {"model": "gpt-4o-mini", "max_tokens": 16384},
+    }
+    paper = make_sample_paper()
+
+    result = paper.generate_tldr(client, llm_params)
+
+    assert result == "这篇论文提出了用于 robot manipulation 的 Transformer 方法。"
+    assert len(calls) == 2
+    assert "Rewrite it now as exactly one concise Simplified Chinese sentence" in calls[1]["messages"][1]["content"]
+
+
+def test_chinese_tldr_does_not_fall_back_to_english_abstract_on_error():
+    broken_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kw: (_ for _ in ()).throw(RuntimeError("API down")))
+        )
+    )
+    llm_params = {
+        "language": "Chinese with key academic terms and paper titles kept in English",
+        "generation_kwargs": {"model": "gpt-4o-mini", "max_tokens": 16384},
+    }
+    paper = make_sample_paper()
+
+    result = paper.generate_tldr(broken_client, llm_params)
+
+    assert result == "TL;DR 生成失败，请打开 PDF 或查看论文原文摘要。"
+    assert result != paper.abstract
+
+
+def test_chinese_tldr_returns_failure_message_after_bad_retry():
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="This is still an English summary."),
+                )
+            ]
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        )
+    )
+    llm_params = {
+        "language": "Chinese with key academic terms and paper titles kept in English",
+        "generation_kwargs": {"model": "gpt-4o-mini", "max_tokens": 16384},
+    }
+    paper = make_sample_paper()
+
+    result = paper.generate_tldr(client, llm_params)
+
+    assert result == "TL;DR 生成失败，请打开 PDF 或查看论文原文摘要。"
+    assert len(calls) == 2
+
+
 # ---------------------------------------------------------------------------
 # generate_affiliations
 # ---------------------------------------------------------------------------
