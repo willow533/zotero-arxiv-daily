@@ -25,6 +25,39 @@ def _needs_chinese_tldr_retry(tldr: str, language: str) -> bool:
     return len(tldr) > 500
 
 
+def _get_nested_value(params: dict, *keys: str):
+    current = params
+    for key in keys:
+        try:
+            current = current.get(key)
+        except AttributeError:
+            return None
+        if current is None:
+            return None
+    return current
+
+
+def _tldr_generation_kwargs(llm_params: dict) -> list[dict]:
+    kwargs = dict(llm_params.get('generation_kwargs', {}))
+    max_tokens = kwargs.get('max_tokens')
+    try:
+        max_tokens = int(max_tokens) if max_tokens is not None else None
+    except (TypeError, ValueError):
+        max_tokens = None
+    if max_tokens is None or max_tokens > 1024:
+        kwargs['max_tokens'] = 512
+
+    candidates = [kwargs]
+    base_url = str(_get_nested_value(llm_params, 'api', 'base_url') or '').lower()
+    model = str(kwargs.get('model', ''))
+    if 'siliconflow' in base_url and model.startswith('gpt-'):
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs['model'] = 'Qwen/Qwen3-8B'
+        candidates.append(fallback_kwargs)
+
+    return candidates
+
+
 @dataclass
 class Paper:
     source: str
@@ -82,13 +115,25 @@ class Paper:
         )
 
         def request_tldr(user_prompt: str) -> str:
-            response = openai_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                **llm_params.get('generation_kwargs', {})
-            )
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            last_error = None
+            for generation_kwargs in _tldr_generation_kwargs(llm_params):
+                try:
+                    response = openai_client.chat.completions.create(
+                        messages=messages,
+                        **generation_kwargs
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        f"Failed to generate TLDR with model {generation_kwargs.get('model')}: {type(e).__name__}: {e}"
+                    )
+            else:
+                raise last_error
             return response.choices[0].message.content
 
         tldr = request_tldr(prompt)

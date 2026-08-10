@@ -178,6 +178,69 @@ def test_chinese_tldr_returns_failure_message_after_bad_retry():
     assert len(calls) == 2
 
 
+def test_tldr_retries_siliconflow_with_qwen_when_gpt_model_fails():
+    models = []
+
+    def create(**kwargs):
+        model = kwargs.get("model")
+        models.append(model)
+        if model == "gpt-4o-mini":
+            raise RuntimeError("model not found")
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="这篇论文提出了一个 concise Chinese TLDR。"),
+                )
+            ]
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        )
+    )
+    llm_params = {
+        "api": {"base_url": "https://api.siliconflow.cn/v1"},
+        "language": "Chinese with key academic terms and paper titles kept in English",
+        "generation_kwargs": {"model": "gpt-4o-mini", "max_tokens": 16384},
+    }
+    paper = make_sample_paper()
+
+    result = paper.generate_tldr(client, llm_params)
+
+    assert result == "这篇论文提出了一个 concise Chinese TLDR。"
+    assert models == ["gpt-4o-mini", "Qwen/Qwen3-8B"]
+
+
+def test_tldr_caps_oversized_max_tokens():
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="这篇论文给出了一句中文总结。"),
+                )
+            ]
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        )
+    )
+    llm_params = {
+        "language": "Chinese with key academic terms and paper titles kept in English",
+        "generation_kwargs": {"model": "gpt-4o-mini", "max_tokens": 16384},
+    }
+    paper = make_sample_paper()
+
+    paper.generate_tldr(client, llm_params)
+
+    assert captured["max_tokens"] == 512
+
+
 # ---------------------------------------------------------------------------
 # generate_affiliations
 # ---------------------------------------------------------------------------
