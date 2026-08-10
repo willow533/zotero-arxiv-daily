@@ -8,6 +8,45 @@ from loguru import logger
 import json
 RawPaperItem = TypeVar('RawPaperItem')
 
+_OPENAI_CHAT_COMPLETION_KWARGS = {
+    'model',
+    'frequency_penalty',
+    'function_call',
+    'functions',
+    'logit_bias',
+    'logprobs',
+    'max_completion_tokens',
+    'max_tokens',
+    'metadata',
+    'modalities',
+    'n',
+    'parallel_tool_calls',
+    'prediction',
+    'presence_penalty',
+    'prompt_cache_key',
+    'reasoning_effort',
+    'response_format',
+    'safety_identifier',
+    'seed',
+    'service_tier',
+    'stop',
+    'store',
+    'stream',
+    'stream_options',
+    'temperature',
+    'tool_choice',
+    'tools',
+    'top_logprobs',
+    'top_p',
+    'user',
+    'verbosity',
+    'web_search_options',
+    'extra_headers',
+    'extra_query',
+    'extra_body',
+    'timeout',
+}
+
 def _prefers_chinese(language: str) -> bool:
     language = str(language).lower()
     return 'chinese' in language or '中文' in language or language.startswith('zh')
@@ -37,16 +76,30 @@ def _get_nested_value(params: dict, *keys: str):
     return current
 
 
-def _tldr_generation_kwargs(llm_params: dict) -> list[dict]:
-    kwargs = dict(llm_params.get('generation_kwargs', {}))
-    max_tokens = kwargs.get('max_tokens')
-    try:
-        max_tokens = int(max_tokens) if max_tokens is not None else None
-    except (TypeError, ValueError):
-        max_tokens = None
-    if max_tokens is None or max_tokens > 1024:
-        kwargs['max_tokens'] = 512
+def _chat_completion_kwargs(generation_kwargs: dict, max_tokens_cap: int | None = None) -> dict:
+    kwargs = dict(generation_kwargs or {})
+    extra_body = dict(kwargs.get('extra_body') or {})
+    for key in list(kwargs):
+        if key not in _OPENAI_CHAT_COMPLETION_KWARGS:
+            extra_body[key] = kwargs.pop(key)
 
+    if max_tokens_cap is not None:
+        for token_key in ('max_tokens', 'max_completion_tokens'):
+            max_tokens = kwargs.get(token_key)
+            try:
+                max_tokens = int(max_tokens) if max_tokens is not None else None
+            except (TypeError, ValueError):
+                max_tokens = None
+            if max_tokens is None or max_tokens > max_tokens_cap:
+                kwargs[token_key] = max_tokens_cap
+
+    if extra_body:
+        kwargs['extra_body'] = extra_body
+    return kwargs
+
+
+def _generation_kwargs_candidates(llm_params: dict, max_tokens_cap: int) -> list[dict]:
+    kwargs = _chat_completion_kwargs(llm_params.get('generation_kwargs', {}), max_tokens_cap=max_tokens_cap)
     candidates = [kwargs]
     base_url = str(_get_nested_value(llm_params, 'api', 'base_url') or '').lower()
     model = str(kwargs.get('model', ''))
@@ -56,6 +109,14 @@ def _tldr_generation_kwargs(llm_params: dict) -> list[dict]:
         candidates.append(fallback_kwargs)
 
     return candidates
+
+
+def _tldr_generation_kwargs(llm_params: dict) -> list[dict]:
+    return _generation_kwargs_candidates(llm_params, max_tokens_cap=512)
+
+
+def _affiliation_generation_kwargs(llm_params: dict) -> list[dict]:
+    return _generation_kwargs_candidates(llm_params, max_tokens_cap=1024)
 
 
 @dataclass
@@ -174,16 +235,28 @@ class Paper:
             prompt_tokens = enc.encode(prompt)
             prompt_tokens = prompt_tokens[:2000]  # truncate to 2000 tokens
             prompt = enc.decode(prompt_tokens)
-            affiliations = openai_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an assistant who perfectly extracts affiliations of authors from a paper. You should return a python list of affiliations sorted by the author order, like [\"TsingHua University\",\"Peking University\"]. If an affiliation is consisted of multi-level affiliations, like 'Department of Computer Science, TsingHua University', you should return the top-level affiliation 'TsingHua University' only. Do not contain duplicated affiliations. If there is no affiliation found, you should return an empty list [ ]. You should only return the final list of affiliations, and do not return any intermediate results.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                **llm_params.get('generation_kwargs', {})
-            )
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are an assistant who perfectly extracts affiliations of authors from a paper. You should return a python list of affiliations sorted by the author order, like [\"TsingHua University\",\"Peking University\"]. If an affiliation is consisted of multi-level affiliations, like 'Department of Computer Science, TsingHua University', you should return the top-level affiliation 'TsingHua University' only. Do not contain duplicated affiliations. If there is no affiliation found, you should return an empty list [ ]. You should only return the final list of affiliations, and do not return any intermediate results.",
+                },
+                {"role": "user", "content": prompt},
+            ]
+            last_error = None
+            for generation_kwargs in _affiliation_generation_kwargs(llm_params):
+                try:
+                    affiliations = openai_client.chat.completions.create(
+                        messages=messages,
+                        **generation_kwargs
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        f"Failed to generate affiliations with model {generation_kwargs.get('model')}: {type(e).__name__}: {e}"
+                    )
+            else:
+                raise last_error
             affiliations = affiliations.choices[0].message.content
 
             affiliations = re.search(r'\[.*?\]', affiliations, flags=re.DOTALL).group(0)

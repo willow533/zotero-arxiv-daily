@@ -241,6 +241,44 @@ def test_tldr_caps_oversized_max_tokens():
     assert captured["max_tokens"] == 512
 
 
+def test_tldr_moves_enable_thinking_into_extra_body():
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="A concise English summary."),
+                )
+            ]
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        )
+    )
+    llm_params = {
+        "language": "English",
+        "generation_kwargs": {
+            "model": "Qwen/Qwen3-32B",
+            "max_tokens": 16384,
+            "enable_thinking": False,
+            "temperature": 0.2,
+        },
+    }
+    paper = make_sample_paper()
+
+    result = paper.generate_tldr(client, llm_params)
+
+    assert result == "A concise English summary."
+    assert "enable_thinking" not in captured
+    assert captured["extra_body"]["enable_thinking"] is False
+    assert captured["temperature"] == 0.2
+    assert captured["max_tokens"] == 512
+
+
 # ---------------------------------------------------------------------------
 # generate_affiliations
 # ---------------------------------------------------------------------------
@@ -308,3 +346,38 @@ def test_affiliations_error_returns_none(llm_params):
     result = paper.generate_affiliations(broken_client, llm_params)
     assert result is None
     assert paper.affiliations is None
+
+
+def test_affiliations_moves_enable_thinking_into_extra_body():
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content='["TsingHua University"]'),
+                )
+            ]
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        )
+    )
+    llm_params = {
+        "generation_kwargs": {
+            "model": "Qwen/Qwen3-32B",
+            "max_tokens": 16384,
+            "enable_thinking": False,
+        },
+    }
+    paper = make_sample_paper()
+
+    result = paper.generate_affiliations(client, llm_params)
+
+    assert result == ["TsingHua University"]
+    assert "enable_thinking" not in captured
+    assert captured["extra_body"]["enable_thinking"] is False
+    assert captured["max_tokens"] == 1024
